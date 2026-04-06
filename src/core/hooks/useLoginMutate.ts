@@ -3,14 +3,16 @@ import { postLogin } from "../services/postLogin"
 
 
 export function useLoginMutate() {
+
     const mutate = useMutation({
         mutationFn: postLogin,
         retry:false,
         
-        onSuccess: (response) => {
-            const token = response.data.token;
+        onSuccess: (data) => {
+            const token = data.token;
             localStorage.setItem("token", token);
             localStorage.setItem('isAuthenticated', 'true');
+
         },
 
         onError: () => {

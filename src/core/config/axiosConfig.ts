@@ -2,13 +2,13 @@ import axios from "axios";
 import { notify } from "@/core/notification/notificationHandler";
 
 export const api = axios.create({
-  baseURL: "http://arcanus.vps-kinghost.net:8080"
+  baseURL: "http://localhost:8080"
 })
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token")
 
-  if (token) {
+  if (!config.url?.includes("/auth") && token) {
     config.headers.Authorization = `Bearer ${token}`
   }
 
@@ -33,6 +33,15 @@ api.interceptors.response.use(
       // 🔐 tratamento específico
       if (error.response.status === 401) {
         localStorage.removeItem("token")
+      }
+
+      if (error.response.status === 403) {
+        localStorage.removeItem("token")
+        localStorage.removeItem("isAuthenticated")
+        if (window.location.pathname !== "/login") {
+          window.location.href = "/login"
+        }
+        return Promise.reject(error)
       }
     } else {
       message = "Erro de conexão com servidor"
