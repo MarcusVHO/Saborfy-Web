@@ -1,12 +1,22 @@
 import { Card } from "@/components/ui/card";
 import type { OrderListData } from "@/core/interfaces/orderListData";
-import { Package, MapPin, Clock, CreditCard, DollarSign, ChevronDown, ChevronUp, MoreVertical, Edit2, CheckCircle2, XCircle, Truck, Utensils, QrCode, Banknote } from "lucide-react";
+import { Package, MapPin, Clock, CreditCard, DollarSign, ChevronDown, ChevronUp, MoreVertical, Edit2, CheckCircle2, XCircle, Truck, Utensils, QrCode, Banknote, AlertTriangle } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,10 +35,12 @@ import {
 } from "@/components/ui/context-menu";
 import { cn } from "@/core/lib/utils";
 import { useUpdateOrderMutation } from "@/core/hooks/useUpdateOrderMutation";
+import { usePaymentMutation } from "@/core/hooks/usePaymentMutation";
 import { EditOrderModal } from "./EditOrderModal";
 import { EditPaymentModal } from "./EditPaymentModal";
 import { notify } from "@/core/notification/notificationHandler";
 import type { UpdateOrderRequest } from "@/core/interfaces/updateOrderRequest";
+import { getOrderDetails } from "@/core/services/getOrderDetails";
 
 type Props = {
   order: OrderListData;
@@ -144,8 +156,12 @@ export function OrderCard({ order, defaultOpen = false }: Props) {
   const [isOpen, setIsOpen] = useState(defaultOpen || timeInfo.shouldBeOpen);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [confirmPaymentsOpen, setConfirmPaymentsOpen] = useState(false);
+  const [confirmPaymentsLoading, setConfirmPaymentsLoading] = useState(false);
+  const [pendingPaymentIds, setPendingPaymentIds] = useState<number[]>([]);
   
   const { mutate: updateStatus } = useUpdateOrderMutation();
+  const { updateStatus: updatePaymentStatus } = usePaymentMutation();
 
   const status = statusConfig[order.status as keyof typeof statusConfig] || fallbackStatus;
   const paymentStatus = paymentStatusConfig[order.paymentStatus as keyof typeof paymentStatusConfig] || fallbackPaymentStatus;
@@ -188,6 +204,53 @@ export function OrderCard({ order, defaultOpen = false }: Props) {
     });
   };
 
+  const loadPendingPayments = async () => {
+    try {
+      setConfirmPaymentsLoading(true);
+      const details = (await getOrderDetails(order.id)) as { payments?: { id: number; status: string }[] };
+      const pending = (details.payments ?? []).filter((p) => p.status === "PENDING");
+      setPendingPaymentIds(pending.map((p) => p.id));
+      if (pending.length === 0) {
+        notify({ type: "info", message: "Nenhum pagamento pendente para confirmar." });
+        setConfirmPaymentsOpen(false);
+      }
+    } catch {
+      notify({ type: "error", message: "Não foi possível carregar os pagamentos do pedido." });
+      setConfirmPaymentsOpen(false);
+    } finally {
+      setConfirmPaymentsLoading(false);
+    }
+  };
+
+  const openConfirmPayments = () => {
+    setConfirmPaymentsOpen(true);
+    void loadPendingPayments();
+  };
+
+  const confirmPendingPayments = async () => {
+    try {
+      if (pendingPaymentIds.length === 0) return;
+      setConfirmPaymentsLoading(true);
+
+      await Promise.all(
+        pendingPaymentIds.map((paymentId) =>
+          updatePaymentStatus.mutateAsync({
+            orderId: order.id,
+            paymentId,
+            status: "APPROVED",
+          })
+        )
+      );
+
+      notify({ type: "success", message: "Pagamentos confirmados!" });
+      setConfirmPaymentsOpen(false);
+    } catch {
+      notify({ type: "error", message: "Não foi possível confirmar os pagamentos." });
+    } finally {
+      setConfirmPaymentsLoading(false);
+    }
+  };
+
   const menuItems = (
     <>
       <DropdownMenuLabel>Ações do Pedido</DropdownMenuLabel>
@@ -199,6 +262,10 @@ export function OrderCard({ order, defaultOpen = false }: Props) {
       <DropdownMenuItem onClick={() => setIsPaymentModalOpen(true)}>
         <CreditCard className="mr-2 h-4 w-4" />
         Editar Pagamentos
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={openConfirmPayments}>
+        <CheckCircle2 className="mr-2 h-4 w-4 text-emerald-600" />
+        Confirmar Pagamentos
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuLabel>Mudar Status</DropdownMenuLabel>
@@ -363,6 +430,10 @@ export function OrderCard({ order, defaultOpen = false }: Props) {
             <CreditCard className="mr-2 h-4 w-4" />
             Editar Pagamentos
           </ContextMenuItem>
+          <ContextMenuItem onClick={openConfirmPayments}>
+            <CheckCircle2 className="mr-2 h-4 w-4 text-emerald-600" />
+            Confirmar Pagamentos
+          </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuLabel>Mudar Status</ContextMenuLabel>
           <ContextMenuItem onClick={() => handleStatusUpdate("CONFIRMED")}>
@@ -399,6 +470,34 @@ export function OrderCard({ order, defaultOpen = false }: Props) {
         onOpenChange={setIsPaymentModalOpen}
         orderId={order.id}
       />
+
+      <AlertDialog open={confirmPaymentsOpen} onOpenChange={(open) => !confirmPaymentsLoading && setConfirmPaymentsOpen(open)}>
+        <AlertDialogContent className="sm:max-w-[420px] border-none shadow-2xl">
+          <AlertDialogHeader className="items-center text-center">
+            <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center mb-2">
+              <AlertTriangle className="w-6 h-6 text-orange-600" />
+            </div>
+            <AlertDialogTitle className="text-xl font-black text-slate-900">Confirmar Pagamentos?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-500 font-medium">
+              Você está prestes a confirmar <span className="font-bold text-slate-900">{pendingPaymentIds.length}</span> pagamento(s) pendente(s) deste pedido.
+              <br /><br />
+              <span className="text-orange-600 font-bold">Esta ação é irreversível e afetará o fechamento do pedido.</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2 mt-4">
+            <AlertDialogCancel className="flex-1 rounded-xl font-bold border-slate-200" disabled={confirmPaymentsLoading}>
+              CANCELAR
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmPendingPayments}
+              className="flex-1 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl"
+              disabled={confirmPaymentsLoading || pendingPaymentIds.length === 0}
+            >
+              {confirmPaymentsLoading ? "CONFIRMANDO..." : "CONFIRMAR"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

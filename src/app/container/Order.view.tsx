@@ -3,7 +3,7 @@ import { OrderCard } from "../features/OrderCard";
 import type { KanbanRequest } from "@/core/interfaces/kanbanRequest";
 import { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
-import { Calendar, Plus, Search, User, MapPin, Package, Trash2, Check } from "lucide-react";
+import { Calendar, Plus, Search, User, MapPin, Package, Trash2, Check, CreditCard, DollarSign } from "lucide-react";
 import { useUpdateOrderMutation } from "@/core/hooks/useUpdateOrderMutation";
 import { useCreateOrderMutation } from "@/core/hooks/useCreateOrderMutation";
 import { useCustomerData } from "@/core/hooks/useCustomerData";
@@ -39,6 +39,14 @@ import { cn } from "@/core/lib/utils";
 import type { CustomerAddress, CustomerListData } from "@/core/interfaces/customerListData";
 import type { MenuItem } from "@/core/interfaces/menuListData";
 import type { OrderListData } from "@/core/interfaces/orderListData";
+import type { PaymentMethod } from "@/core/services/paymentService";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 
 type OrderStatus = "CREATED" | "CONFIRMED" | "PREPARING" | "OUT_FOR_DELIVERY" | "DELIVERED" | "CANCELED" | "COMPLETED";
 
@@ -75,6 +83,8 @@ export function OrderView() {
     const [orderItems, setOrderItems] = useState<{ id: number; name: string; price: number; quantity: number }[]>([]);
     const [observation, setObservation] = useState("");
     const [selectedMenuTab, setSelectedMenuTab] = useState("all");
+    const [payments, setPayments] = useState<{ amount: string; method: PaymentMethod }[]>([]);
+    const [newPayment, setNewPayment] = useState<{ amount: string; method: PaymentMethod }>({ amount: "", method: "PIX" });
 
     const [isCustomerPopoverOpen, setIsCustomerPopoverOpen] = useState(false);
 
@@ -102,16 +112,21 @@ export function OrderView() {
 
     const handleCreateOrder = (e: React.FormEvent) => {
         e.preventDefault();
-        if (!selectedCustomer || !selectedAddress || orderItems.length === 0) {
+        if (!selectedCustomer || orderItems.length === 0) {
             notify({ type: "error", message: "Preencha todos os campos obrigatórios!" });
             return;
         }
 
+        const normalizedPayments = payments
+            .map((p) => ({ amount: Number(p.amount), method: p.method }))
+            .filter((p) => Number.isFinite(p.amount) && p.amount > 0);
+
         createOrder({
             customerId: selectedCustomer.id,
-            addressId: selectedAddress.id,
+            addressId: selectedAddress?.id ?? null,
             observation: observation || null,
-            items: orderItems.map(item => ({ id: item.id, quantity: item.quantity }))
+            items: orderItems.map(item => ({ id: item.id, quantity: item.quantity })),
+            payments: normalizedPayments
         }, {
             onSuccess: () => {
                 notify({ type: "success", message: "Pedido criado com sucesso!" });
@@ -127,6 +142,8 @@ export function OrderView() {
         setOrderItems([]);
         setObservation("");
         setCustomerSearch("");
+        setPayments([]);
+        setNewPayment({ amount: "", method: "PIX" });
     };
 
     const addItem = (item: MenuItem) => {
@@ -153,6 +170,21 @@ export function OrderView() {
     };
 
     const totalOrder = orderItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+    const totalPayments = payments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+
+    const addPaymentToOrder = () => {
+        const amount = Number(newPayment.amount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            notify({ type: "error", message: "Informe um valor de pagamento válido." });
+            return;
+        }
+        setPayments([...payments, { amount: newPayment.amount, method: newPayment.method }]);
+        setNewPayment({ amount: "", method: "PIX" });
+    };
+
+    const removePaymentFromOrder = (index: number) => {
+        setPayments(payments.filter((_, i) => i !== index));
+    };
 
     const handleStartDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const [year, month, day] = e.target.value.split('-').map(Number);
@@ -270,8 +302,24 @@ export function OrderView() {
 
                                         {selectedCustomer && (
                                             <div className="grid gap-3 animate-in fade-in slide-in-from-top-2 duration-300 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                                                <Label className="font-bold text-slate-700">Endereço de Entrega</Label>
+                                                <Label className="font-bold text-slate-700">Endereço (opcional)</Label>
                                                 <div className="grid grid-cols-1 gap-2">
+                                                    <div
+                                                        onClick={() => setSelectedAddress(null)}
+                                                        className={cn(
+                                                            "flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all",
+                                                            selectedAddress === null
+                                                                ? "border-orange-600 bg-orange-50/50 shadow-sm ring-1 ring-orange-600/20"
+                                                                : "border-slate-100 hover:border-orange-200 hover:bg-slate-50"
+                                                        )}
+                                                    >
+                                                        <MapPin className={cn("w-4 h-4 mt-0.5", selectedAddress === null ? "text-orange-600" : "text-slate-400")} />
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-sm font-bold text-slate-900 truncate">Sem endereço</p>
+                                                            <p className="text-xs text-slate-500 truncate">Retirada / sem entrega</p>
+                                                        </div>
+                                                        {selectedAddress === null && <Check className="w-4 h-4 text-orange-600 mt-1" />}
+                                                    </div>
                                                     {selectedCustomer.addresses?.map((address) => (
                                                         <div 
                                                             key={address.id}
@@ -427,6 +475,98 @@ export function OrderView() {
 
                                     <Separator className="bg-slate-200/60" />
 
+                                    {/* Pagamento */}
+                                    <div className="space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <Label className="font-bold text-base text-slate-900 flex items-center gap-2">
+                                                <CreditCard className="w-4 h-4 text-orange-600" />
+                                                Pagamentos (opcional)
+                                            </Label>
+                                            <div className="text-right">
+                                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total informado</p>
+                                                <p className="text-sm font-black text-slate-900 tabular-nums">{new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(totalPayments)}</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                                                <div className="space-y-2 sm:col-span-2">
+                                                    <Label className="text-xs text-slate-500">Valor</Label>
+                                                    <div className="relative">
+                                                        <DollarSign className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                                                        <Input
+                                                            type="number"
+                                                            placeholder="0"
+                                                            value={newPayment.amount}
+                                                            onChange={(e) => setNewPayment({ ...newPayment, amount: e.target.value })}
+                                                            className="pl-9 bg-slate-50/50 border-slate-200 focus:border-orange-300 rounded-xl"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label className="text-xs text-slate-500">Método</Label>
+                                                    <Select
+                                                        value={newPayment.method}
+                                                        onValueChange={(val: PaymentMethod) => setNewPayment({ ...newPayment, method: val })}
+                                                    >
+                                                        <SelectTrigger className="w-full bg-slate-50/50 border-slate-200 focus:border-orange-300 rounded-xl h-10">
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="PIX">PIX</SelectItem>
+                                                            <SelectItem value="CASH">Dinheiro</SelectItem>
+                                                            <SelectItem value="DEBIT_CARD">Débito</SelectItem>
+                                                            <SelectItem value="CREDIT_CARD">Crédito</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex items-center justify-end gap-2">
+                                                <Button
+                                                    type="button"
+                                                    onClick={addPaymentToOrder}
+                                                    className="h-10 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl px-6"
+                                                    disabled={!newPayment.amount}
+                                                >
+                                                    Adicionar
+                                                </Button>
+                                            </div>
+
+                                            {payments.length > 0 && (
+                                                <div className="space-y-2">
+                                                    <Label className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
+                                                        Pagamentos adicionados
+                                                        <div className="h-px flex-1 bg-slate-200/60"></div>
+                                                    </Label>
+                                                    <div className="grid gap-2">
+                                                        {payments.map((p, idx) => (
+                                                            <div key={idx} className="flex items-center justify-between bg-slate-50/50 rounded-xl border border-slate-200 px-3 py-2">
+                                                                <div className="min-w-0">
+                                                                    <p className="text-xs font-black text-slate-900 tabular-nums">
+                                                                        {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(p.amount) || 0)}
+                                                                    </p>
+                                                                    <p className="text-[10px] font-bold text-slate-500">{p.method}</p>
+                                                                </div>
+                                                                <Button
+                                                                    type="button"
+                                                                    variant="ghost"
+                                                                    size="icon-sm"
+                                                                    onClick={() => removePaymentFromOrder(idx)}
+                                                                    className="text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                                                                >
+                                                                    <Trash2 className="w-4 h-4" />
+                                                                </Button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <Separator className="bg-slate-200/60" />
+
                                     {/* Observação */}
                                     <div className="grid gap-2">
                                         <Label className="font-bold text-slate-700">Observação</Label>
@@ -451,7 +591,7 @@ export function OrderView() {
                                     form="create-order-form"
                                     type="submit"
                                     className="bg-orange-600 hover:bg-orange-700 text-white font-black px-10 h-14 rounded-2xl shadow-xl shadow-orange-200 transition-all active:scale-95 disabled:opacity-50 disabled:grayscale"
-                                    disabled={isCreatingOrder || !selectedCustomer || !selectedAddress || orderItems.length === 0}
+                                    disabled={isCreatingOrder || !selectedCustomer || orderItems.length === 0}
                                 >
                                     {isCreatingOrder ? "CRIANDO..." : "FINALIZAR PEDIDO"}
                                 </Button>

@@ -1,11 +1,23 @@
-import { useMemo, useState } from "react";
-import { Wallet, TrendingUp, Clock, Calendar } from "lucide-react";
-import { Input } from "@/components/ui/input";
+import { useMemo, useState, type ReactNode } from "react";
+import { Calendar, Plus, Receipt, TrendingDown, TrendingUp, Wallet } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/core/lib/utils";
-import { usePaymentDashboard } from "@/core/hooks/usePaymentDashboard";
-import type { PaymentDashboardData, PaymentDashboardLast7Point, PaymentDashboardRecentItem } from "@/core/interfaces/paymentDashboardData";
+import { notify } from "@/core/notification/notificationHandler";
+import { useCreateFinanceExpenseMutation, useFinanceAvg, useFinanceEntries, useFinanceExpense, useFinanceRevenue } from "@/core/hooks/useFinance";
+import type { FinanceEntry, FinanceEntryType } from "@/core/interfaces/financeData";
 
 function formatDateForInput(date: Date) {
   return date.toISOString().split("T")[0];
@@ -32,73 +44,226 @@ function formatLocalDateKey(date: Date) {
   return `${y}-${m}-${d}`;
 }
 
-function normalizeLast7(last7: PaymentDashboardLast7Point[], endDate: Date) {
-  const map = new Map(last7.map(([day, count]) => [day, count]));
-  const days: { day: string; count: number }[] = [];
-
-  const end = new Date(endDate);
-  end.setHours(0, 0, 0, 0);
-
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(end);
-    d.setDate(end.getDate() - i);
-    const key = formatLocalDateKey(d);
-    days.push({ day: key, count: map.get(key) ?? 0 });
-  }
-
-  return days;
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 }
 
-function BarChart({ data }: { data: { day: string; count: number }[] }) {
-  const max = Math.max(1, ...data.map((d) => d.count));
+function entryTypeLabel(type: FinanceEntryType) {
+  if (type === "REVENUE") return "Receita";
+  if (type === "EXPENSE") return "Despesa";
+  if (type === "CANCELED") return "Cancelado";
+  return type;
+}
+
+function entryTypePillClass(type: FinanceEntryType) {
+  if (type === "REVENUE") return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  if (type === "EXPENSE") return "bg-red-50 text-red-700 border-red-200";
+  if (type === "CANCELED") return "bg-slate-50 text-slate-700 border-slate-200";
+  return "bg-slate-50 text-slate-700 border-slate-200";
+}
+
+function PeriodPicker({
+  startDate,
+  endDate,
+  onStartDateChange,
+  onEndDateChange,
+}: {
+  startDate: Date;
+  endDate: Date;
+  onStartDateChange: (d: Date) => void;
+  onEndDateChange: (d: Date) => void;
+}) {
   return (
-    <div className="w-full h-44 flex items-end gap-2">
-      {data.map((d) => {
-        const h = Math.round((d.count / max) * 100);
-        const weekday = new Date(`${d.day}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "short" });
-        return (
-          <div key={d.day} className="flex-1 flex flex-col items-center gap-2">
-            <div
-              className="w-full rounded-lg bg-orange-600/90 hover:bg-orange-600 transition-colors"
-              style={{ height: `${Math.max(6, h)}%` }}
-              title={`${d.day}: ${d.count}`}
-            />
-            <span className="text-[10px] font-bold text-slate-500 tabular-nums">
-              {weekday.replace(".", "").toUpperCase()}
-            </span>
-          </div>
-        );
-      })}
+    <div className="flex items-center gap-3 bg-white p-2 rounded-xl border border-slate-200 shadow-sm h-11">
+      <div className="flex items-center gap-2 px-2 text-slate-500">
+        <Calendar className="w-4 h-4" />
+        <span className="text-xs font-semibold uppercase tracking-wider">Período</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          type="date"
+          className="w-36 h-8 text-xs border-none shadow-none focus-visible:ring-0"
+          value={formatDateForInput(startDate)}
+          onChange={(e) => onStartDateChange(parseDateInputToLocalDayStart(e.target.value))}
+        />
+        <span className="text-slate-400 text-xs">até</span>
+        <Input
+          type="date"
+          className="w-36 h-8 text-xs border-none shadow-none focus-visible:ring-0"
+          value={formatDateForInput(endDate)}
+          onChange={(e) => onEndDateChange(parseDateInputToLocalDayEnd(e.target.value))}
+        />
+      </div>
     </div>
   );
 }
 
-function methodLabel(method: PaymentDashboardRecentItem["method"]) {
-  if (method === "PIX") return "PIX";
-  if (method === "CASH") return "Dinheiro";
-  if (method === "DEBIT_CARD") return "Débito";
-  if (method === "CREDIT_CARD") return "Crédito";
-  return method;
+function SummaryCard({
+  title,
+  value,
+  icon,
+  accentClass,
+}: {
+  title: string;
+  value: string;
+  icon: ReactNode;
+  accentClass: string;
+}) {
+  return (
+    <Card className="p-5 border-slate-200 shadow-sm">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{title}</p>
+          <p className={cn("text-2xl font-black tabular-nums", accentClass)}>{value}</p>
+        </div>
+        <div className="bg-slate-50 border border-slate-100 rounded-xl p-2">{icon}</div>
+      </div>
+    </Card>
+  );
 }
 
-function statusLabel(status: PaymentDashboardRecentItem["status"]) {
-  if (status === "PENDING") return "Pendente";
-  if (status === "APPROVED") return "Aprovado";
-  if (status === "CANCELED") return "Cancelado";
-  if (status === "REFUNDED") return "Reembolsado";
-  if (status === "FAILED") return "Falhou";
-  if (status === "PARTIALLY_PAID") return "Parcial";
-  return status;
+function AddExpenseDialog({ onCreated }: { onCreated?: () => void }) {
+  const { mutate: createExpense, isPending } = useCreateFinanceExpenseMutation();
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const reset = () => {
+    setName("");
+    setValue("");
+  };
+
+  const submit = () => {
+    const numericValue = Number(value);
+    if (!name.trim() || !Number.isFinite(numericValue) || numericValue <= 0) {
+      notify({ type: "error", message: "Informe um nome e um valor válido." });
+      return;
+    }
+
+    createExpense(
+      { name: name.trim(), value: numericValue },
+      {
+        onSuccess: () => {
+          notify({ type: "success", message: "Despesa lançada!" });
+          setOpen(false);
+          reset();
+          onCreated?.();
+        },
+      }
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button className="bg-orange-600 hover:bg-orange-700 text-white gap-2 font-bold shadow-md shadow-orange-100">
+          <Plus className="w-4 h-4" />
+          Nova Despesa
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-[520px] w-[95vw]">
+        <DialogHeader>
+          <DialogTitle className="text-xl font-black text-slate-900">Lançar despesa</DialogTitle>
+          <DialogDescription className="text-slate-500 font-medium">
+            Registre despesas do período (compras, taxas, etc.).
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-4">
+          <div className="grid gap-2">
+            <Label className="font-bold text-slate-700">Nome</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex: compras do mês" />
+          </div>
+          <div className="grid gap-2">
+            <Label className="font-bold text-slate-700">Valor</Label>
+            <Input type="number" value={value} onChange={(e) => setValue(e.target.value)} placeholder="0" />
+          </div>
+        </div>
+
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={() => setOpen(false)}>
+            Cancelar
+          </Button>
+          <Button
+            onClick={submit}
+            disabled={isPending}
+            className="bg-orange-600 hover:bg-orange-700 text-white font-black"
+          >
+            {isPending ? "SALVANDO..." : "SALVAR"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
-function statusPillClass(status: PaymentDashboardRecentItem["status"]) {
-  if (status === "APPROVED") return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  if (status === "PENDING") return "bg-yellow-50 text-yellow-700 border-yellow-200";
-  if (status === "CANCELED") return "bg-slate-50 text-slate-700 border-slate-200";
-  if (status === "REFUNDED") return "bg-blue-50 text-blue-700 border-blue-200";
-  if (status === "FAILED") return "bg-red-50 text-red-700 border-red-200";
-  if (status === "PARTIALLY_PAID") return "bg-orange-50 text-orange-700 border-orange-200";
-  return "bg-slate-50 text-slate-700 border-slate-200";
+function EntriesList({ entries }: { entries: FinanceEntry[] }) {
+  const grouped = useMemo(() => {
+    const map = new Map<string, FinanceEntry[]>();
+    for (const e of entries) {
+      const d = new Date(e.createdAt);
+      const key = formatLocalDateKey(d);
+      map.set(key, [...(map.get(key) ?? []), e]);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => (a > b ? -1 : 1));
+  }, [entries]);
+
+  return (
+    <Card className="p-5 border-slate-200 shadow-sm overflow-hidden">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Receipt className="w-4 h-4 text-orange-600" />
+          <p className="text-lg font-black text-slate-900">Movimentações</p>
+        </div>
+        <p className="text-xs text-slate-500 font-medium">{entries.length} registros</p>
+      </div>
+
+      <Separator className="my-4 bg-slate-200/60" />
+
+      <div className="overflow-y-auto custom-scrollbar max-h-[420px] pr-2">
+        <div className="grid gap-3">
+          {grouped.map(([day, items]) => (
+            <div key={day} className="space-y-2">
+              <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-slate-400">
+                <span>{new Date(`${day}T12:00:00`).toLocaleDateString("pt-BR")}</span>
+                <span>{items.length} itens</span>
+              </div>
+              <div className="grid gap-2">
+                {items.map((e, idx) => (
+                  <div
+                    key={`${e.createdAt}-${e.name}-${idx}`}
+                    className="flex items-center justify-between bg-white rounded-2xl border border-slate-200 p-4"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-slate-900 truncate">{e.name}</p>
+                      <p className="text-[11px] text-slate-500 font-medium">{new Date(e.createdAt).toLocaleString("pt-BR")}</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <p className={cn("text-sm font-black tabular-nums", e.type === "EXPENSE" ? "text-red-600" : "text-emerald-600")}>
+                        {formatCurrency(e.value)}
+                      </p>
+                      <span
+                        className={cn(
+                          "shrink-0 px-2.5 py-1 rounded-full border text-[10px] font-black uppercase tracking-wider",
+                          entryTypePillClass(e.type)
+                        )}
+                      >
+                        {entryTypeLabel(e.type)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {entries.length === 0 && (
+            <div className="h-32 flex items-center justify-center text-slate-400">Nenhuma movimentação no período.</div>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
 }
 
 export function FinanceView() {
@@ -113,11 +278,18 @@ export function FinanceView() {
     return d;
   });
 
-  const dashboardQuery = usePaymentDashboard({ startDate, endDate });
-  const data = dashboardQuery.data as PaymentDashboardData | undefined;
+  const params = useMemo(() => ({ startDate, endDate }), [startDate, endDate]);
 
-  const chartData = useMemo(() => normalizeLast7(data?.last7 || [], endDate), [data?.last7, endDate]);
-  const todaySalesCount = chartData[chartData.length - 1]?.count ?? 0;
+  const entriesQuery = useFinanceEntries(params);
+  const revenueQuery = useFinanceRevenue(params);
+  const expenseQuery = useFinanceExpense(params);
+  const avgQuery = useFinanceAvg(params);
+
+  const isLoading = entriesQuery.isLoading || revenueQuery.isLoading || expenseQuery.isLoading || avgQuery.isLoading;
+  const entries = entriesQuery.data ?? [];
+  const revenue = revenueQuery.data ?? 0;
+  const expense = expenseQuery.data ?? 0;
+  const avg = avgQuery.data ?? 0;
 
   return (
     <div className="p-6 w-full h-full overflow-hidden">
@@ -127,123 +299,31 @@ export function FinanceView() {
             <Wallet className="w-6 h-6 text-orange-600" />
             Finanças
           </h2>
-          <p className="text-slate-500">Acompanhe pagamentos, receitas e volume.</p>
+          <p className="text-slate-500">Acompanhe receitas, despesas e movimentações.</p>
         </div>
 
-        <div className="flex items-center gap-3 bg-white p-2 rounded-xl border border-slate-200 shadow-sm h-11">
-          <div className="flex items-center gap-2 px-2 text-slate-500">
-            <Calendar className="w-4 h-4" />
-            <span className="text-xs font-semibold uppercase tracking-wider">Período</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Input
-              type="date"
-              className="w-36 h-8 text-xs border-none shadow-none focus-visible:ring-0"
-              value={formatDateForInput(startDate)}
-              onChange={(e) => setStartDate(parseDateInputToLocalDayStart(e.target.value))}
-            />
-            <span className="text-slate-400 text-xs">até</span>
-            <Input
-              type="date"
-              className="w-36 h-8 text-xs border-none shadow-none focus-visible:ring-0"
-              value={formatDateForInput(endDate)}
-              onChange={(e) => setEndDate(parseDateInputToLocalDayEnd(e.target.value))}
-            />
-          </div>
+        <div className="flex items-center gap-3">
+          <AddExpenseDialog onCreated={() => entriesQuery.refetch()} />
+          <PeriodPicker startDate={startDate} endDate={endDate} onStartDateChange={setStartDate} onEndDateChange={setEndDate} />
         </div>
       </div>
 
-      {dashboardQuery.isLoading ? (
+      {isLoading ? (
         <div className="h-full flex items-center justify-center text-slate-500">
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 border-2 border-orange-600 border-t-transparent rounded-full animate-spin" />
-            Carregando dashboard...
+            Carregando finanças...
           </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-220px)]">
-          <Card className="p-5 border-slate-200 shadow-sm">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Receita</p>
-                <p className="text-2xl font-black text-emerald-600 tabular-nums">
-                  {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(data?.revenue || 0)}
-                </p>
-              </div>
-              <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-2">
-                <TrendingUp className="w-5 h-5 text-emerald-600" />
-              </div>
-            </div>
+          <SummaryCard title="Receita" value={formatCurrency(revenue)} icon={<TrendingUp className="w-5 h-5 text-emerald-600" />} accentClass="text-emerald-600" />
+          <SummaryCard title="Despesa" value={formatCurrency(expense)} icon={<TrendingDown className="w-5 h-5 text-red-600" />} accentClass="text-red-600" />
+          <SummaryCard title="Média" value={new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(avg)} icon={<Wallet className="w-5 h-5 text-orange-600" />} accentClass="text-slate-900" />
 
-            <Separator className="my-4 bg-slate-200/60" />
-
-            <div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Vendas Hoje</p>
-                  <p className="text-lg font-black text-slate-900 tabular-nums">{todaySalesCount}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Média</p>
-                  <p className="text-lg font-black text-slate-900 tabular-nums">
-                    {new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(data?.avg || 0)}
-                  </p>
-                  <p className="text-xs text-slate-500 font-medium">pagamentos por dia (últimos 30 dias)</p>
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          <Card className="p-5 border-slate-200 shadow-sm lg:col-span-2">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Últimos 7 dias</p>
-                <p className="text-lg font-black text-slate-900">Volume de pagamentos</p>
-              </div>
-            </div>
-            <div className="mt-6">
-              <BarChart data={chartData} />
-            </div>
-          </Card>
-
-          <Card className="p-5 border-slate-200 shadow-sm lg:col-span-3 overflow-hidden">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-orange-600" />
-                <p className="text-lg font-black text-slate-900">Recentes</p>
-              </div>
-              <p className="text-xs text-slate-500 font-medium">
-                {data?.recent?.length || 0} registros
-              </p>
-            </div>
-
-            <div className="mt-4 overflow-y-auto custom-scrollbar max-h-[300px] pr-2">
-              <div className="grid gap-2">
-                {(data?.recent || []).map((p) => (
-                  <div key={p.id} className="flex items-center justify-between bg-white rounded-2xl border border-slate-200 p-4">
-                    <div className="min-w-0">
-                      <p className="text-sm font-black text-slate-900 tabular-nums">
-                        {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(p.amount)}
-                        <span className="ml-2 text-xs font-bold text-slate-500">{methodLabel(p.method)}</span>
-                      </p>
-                      <p className="text-[11px] text-slate-500 font-medium">
-                        {new Date(p.createdAt).toLocaleString("pt-BR")}
-                      </p>
-                    </div>
-                    <span className={cn("shrink-0 px-2.5 py-1 rounded-full border text-[10px] font-black uppercase tracking-wider", statusPillClass(p.status))}>
-                      {statusLabel(p.status)}
-                    </span>
-                  </div>
-                ))}
-
-                {(data?.recent?.length || 0) === 0 && (
-                  <div className="h-32 flex items-center justify-center text-slate-400">
-                    Nenhum pagamento no período.
-                  </div>
-                )}
-              </div>
-            </div>
-          </Card>
+          <div className="lg:col-span-3 overflow-hidden">
+            <EntriesList entries={entries} />
+          </div>
         </div>
       )}
     </div>

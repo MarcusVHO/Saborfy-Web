@@ -6,6 +6,7 @@ import { OrderView } from "@/app/container/Order.view";
 import { CustomerView } from "@/app/container/Customer.view";
 import { MenuView } from "@/app/container/MenuView";
 import { FinanceView } from "@/app/container/Finance.view";
+import { DashboardView } from "@/app/container/Dashboard.view";
 
 export const router = createBrowserRouter([
     {
@@ -22,7 +23,7 @@ export const router = createBrowserRouter([
         children: [
             {
                 index: true,
-                element: <FinanceView />
+                element: <DashboardView />
             },
             {
                 path: "orders",
