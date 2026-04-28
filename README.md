@@ -19,7 +19,6 @@ Frontend do sistema SaborFy, desenvolvido para consumo da API e gerenciamento de
 - 📋 Visualização de cardápio  
 - 🛒 Criação de pedidos  
 - 📦 Acompanhamento de pedidos  
-- 💳 Integração com sistema de pagamentos  
 - 📊 Interface amigável e responsiva  
 
 ---
@@ -44,24 +43,3 @@ Este projeto consome a API:
 
 ---
 
-## ⚙️ Como rodar o projeto
-
-### Pré-requisitos
-
-- Node.js (se usar framework)
-- Navegador atualizado  
-
-### Rodando localmente
-
-```bash
-# Clone o repositório
-git clone https://github.com/MarcusVHO/Saborfy-Web.git
-
-# Entre na pasta
-cd Saborfy-Web
-
-# Instale dependências (se necessário)
-npm install
-
-# Rode o projeto
-npm run dev
