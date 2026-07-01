@@ -39,7 +39,6 @@ Este projeto consome a API:
 
 - Design simples e funcional  
 - Foco em usabilidade  
-- Responsivo (adaptado para diferentes telas)  
 
 ---
 
